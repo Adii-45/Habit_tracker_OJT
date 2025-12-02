@@ -15,8 +15,13 @@ import {
   CartesianGrid,
 } from "recharts";
 import { useNavigate } from "react-router-dom";
+import {
+  getActiveUserId,
+  fetchUserState,
+  apiUpsertMoodDay,
+  apiDeleteMoodDay,
+} from "../../utils/apiClient";
 
-const USERS_KEY = "habitrix_users";
 const ACTIVE_USER_KEY = "habitrix_activeUser";
 
 const moodOptions = [
@@ -307,6 +312,7 @@ export default function MoodTracker() {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [avatar, setAvatar] = useState("");
+  const [userId, setUserId] = useState("");
 
   const [moods, setMoods] = useState({});
   const [todayMood, setTodayMood] = useState(null);
@@ -326,68 +332,89 @@ export default function MoodTracker() {
 
   /* LOAD USER + MOODS */
   useEffect(() => {
-    const active = localStorage.getItem(ACTIVE_USER_KEY);
-    if (!active) return navigate("/login");
+    const activeUsername = localStorage.getItem(ACTIVE_USER_KEY);
+    const activeUserId = getActiveUserId();
+    if (!activeUsername || !activeUserId) {
+      navigate("/login");
+      return;
+    }
 
-    const users = JSON.parse(localStorage.getItem(USERS_KEY) || "{}");
-    const stored = users[active] || {};
-    const moodData = JSON.parse(localStorage.getItem("mood_logs") || "{}");
+    async function load() {
+      try {
+        const user = await fetchUserState(activeUserId);
+        setUserId(activeUserId);
+        setUsername(user.username || activeUsername);
+        setDisplayName(user.name || activeUsername);
+        setAvatar(user.avatarDataUrl || "");
+        const moodData = user.moodLogs || {};
+        setMoods(moodData);
+        const key = new Date().toISOString().slice(0, 10);
+        setTodayMood(moodData[key] || null);
+        setIsReady(true);
+      } catch (error) {
+        console.error("Failed to load mood data", error);
+        navigate("/login");
+      }
+    }
 
-    setUsername(active);
-    setDisplayName(stored.name || active);
-    setAvatar(stored.avatarDataUrl || "");
-    setMoods(moodData);
-
-    const todayKey = new Date().toISOString().slice(0, 10);
-    setTodayMood(moodData[todayKey] || null);
-
-    setIsReady(true);
-  }, []);
+    load();
+  }, [navigate]);
 
   const todayKey = new Date().toISOString().slice(0, 10);
 
-  const persist = (next) => {
-    localStorage.setItem("mood_logs", JSON.stringify(next));
-    setMoods(next);
+  const persistDay = async (dateKey, payload) => {
+    if (!userId) return null;
+    const saved = await apiUpsertMoodDay(userId, dateKey, payload);
+    setMoods((prev) => ({ ...prev, [dateKey]: saved }));
+    return saved;
   };
 
   /* Log mood */
-  const handleLogMood = (value) => {
-    const updated = {
-      ...moods,
-      [todayKey]: { mood: value, notes: moods[todayKey]?.notes || [] },
-    };
-    persist(updated);
-    setTodayMood(updated[todayKey]);
+  const handleLogMood = async (value) => {
+    if (!userId) return;
+    try {
+      const payload = {
+        mood: value,
+        notes: moods[todayKey]?.notes || [],
+      };
+      const saved = await persistDay(todayKey, payload);
+      setTodayMood(saved);
+    } catch (error) {
+      console.error("Failed to log mood", error);
+    }
   };
 
   /* Today notes */
-  const addNote = () => {
-    if (!note.trim()) return;
-
-    const updated = {
-      ...moods,
-      [todayKey]: {
-        mood: todayMood?.mood,
-        notes: [...(todayMood?.notes || []), { id: Date.now(), text: note }],
-      },
-    };
-
-    persist(updated);
-    setTodayMood(updated[todayKey]);
-    setNote("");
+  const addNote = async () => {
+    if (!note.trim() || !userId) return;
+    try {
+      const payload = {
+        mood: todayMood?.mood || null,
+        notes: [
+          ...(todayMood?.notes || []),
+          { id: String(Date.now()), text: note },
+        ],
+      };
+      const saved = await persistDay(todayKey, payload);
+      setTodayMood(saved);
+      setNote("");
+    } catch (error) {
+      console.error("Failed to add mood note", error);
+    }
   };
 
-  const deleteNote = (id) => {
-    const updated = {
-      ...moods,
-      [todayKey]: {
+  const deleteNote = async (id) => {
+    if (!todayMood || !userId) return;
+    try {
+      const payload = {
         mood: todayMood.mood,
-        notes: todayMood.notes.filter((n) => n.id !== id),
-      },
-    };
-    persist(updated);
-    setTodayMood(updated[todayKey]);
+        notes: (todayMood.notes || []).filter((n) => n.id !== id),
+      };
+      const saved = await persistDay(todayKey, payload);
+      setTodayMood(saved);
+    } catch (error) {
+      console.error("Failed to delete mood note", error);
+    }
   };
 
   /* Weekly intensity */
@@ -471,20 +498,29 @@ export default function MoodTracker() {
 
   const closeDrawer = () => {
     setDrawerOpen(false);
-    const moodData = JSON.parse(localStorage.getItem("mood_logs") || "{}");
-    setMoods(moodData);
-    setTodayMood(moodData[todayKey] || null);
   };
 
-  const saveDayFromDrawer = (dateKey, payload) => {
-    const next = { ...moods };
-
-    if (!payload) delete next[dateKey];
-    else next[dateKey] = { mood: payload.mood, notes: payload.notes };
-
-    persist(next);
-
-    if (dateKey === todayKey) setTodayMood(next[todayKey] || null);
+  const saveDayFromDrawer = async (dateKey, payload) => {
+    if (!userId) return;
+    try {
+      if (!payload) {
+        await apiDeleteMoodDay(userId, dateKey);
+        setMoods((prev) => {
+          const next = { ...prev };
+          delete next[dateKey];
+          return next;
+        });
+        if (dateKey === todayKey) setTodayMood(null);
+      } else {
+        const saved = await persistDay(dateKey, {
+          mood: payload.mood,
+          notes: payload.notes,
+        });
+        if (dateKey === todayKey) setTodayMood(saved);
+      }
+    } catch (error) {
+      console.error("Failed to save day from drawer", error);
+    }
   };
 
   if (!isReady) return null;
@@ -493,8 +529,8 @@ export default function MoodTracker() {
      RENDER STARTS HERE
   ---------------------------------------------------------- */
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-50 ">
-      <div className="flex min-h-screen">
+    <div className="h-screen bg-slate-950 text-slate-50">
+      <div className="flex h-screen">
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
         {sidebarOpen && (
@@ -517,29 +553,33 @@ export default function MoodTracker() {
               completion={0}
               onToggleSidebar={() => setSidebarOpen((o) => !o)}
               onNewHabit={() => navigate("/dashboard")}
-              onManageProfile={() => navigate("/profile")}
+              onManageProfile={() => navigate("/settings")}
               onLogout={() => {
                 localStorage.removeItem(ACTIVE_USER_KEY);
+                localStorage.removeItem("habitrix_activeUserId");
                 navigate("/login");
               }}
             />
 
             {/* HEADER */}
-            <div>
+            <div className="space-y-1">
+              <p className="text-sm text-slate-400">
+                Welcome back, {displayName || username}!
+              </p>
               <h1 className="text-2xl font-semibold">Track Your Mood</h1>
-              <p className="text-slate-400 text-sm mt-1">
+              <p className="text-slate-400 text-sm">
                 Log how you feel and visualize emotional patterns.
               </p>
             </div>
 
             {/* TOP ROW */}
-            <section className="grid gap-4 md:grid-cols-3">
+            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {/* FEELINGS PICKER */}
               <div className="rounded-2xl border border-slate-800/40 bg-slate-900/90 px-5 py-4 shadow-sm">
                 <h2 className="font-semibold text-sm mb-3">
                   How are you feeling?
                 </h2>
-                <div className="flex gap-3">
+                <div className="flex flex-wrap gap-3 sm:gap-4">
                   {moodOptions.map((m) => (
                     <button
                       key={m.value}
@@ -607,13 +647,13 @@ export default function MoodTracker() {
               <div className="rounded-2xl border border-slate-800/40 bg-slate-900/90 px-5 py-5 shadow-sm">
                 <h2 className="font-semibold text-sm mb-3">Weekly Intensity</h2>
 
-                <div className="grid grid-cols-7 gap-2 text-center text-[11px] text-slate-400 mb-2">
+                <div className="grid grid-cols-7 gap-1.5 text-center text-[11px] text-slate-400 mb-2">
                   {WEEK_LABELS.map((d) => (
                     <span key={d}>{d}</span>
                   ))}
                 </div>
 
-                <div className="grid grid-cols-7 gap-2">
+                <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
                   {weeklySquares.map((sq) => {
                     const score = MOOD_SCORE[sq.mood] ?? 0;
                     const cls = score ? HEAT_COLORS[score] : "bg-slate-800";
@@ -726,49 +766,51 @@ export default function MoodTracker() {
                     Click a day to edit mood + notes.
                   </p>
 
-                  <div className="mt-4">
-                    <div className="grid grid-cols-7 gap-1 text-[10px] text-slate-500 mb-1">
-                      {WEEK_LABELS.map((d) => (
-                        <div key={d} className="text-center">
-                          {d}
-                        </div>
-                      ))}
-                    </div>
+                  <div className="mt-4 overflow-x-auto">
+                    <div className="inline-block min-w-full">
+                      <div className="grid grid-cols-7 gap-1 text-[10px] text-slate-500 mb-1">
+                        {WEEK_LABELS.map((d) => (
+                          <div key={d} className="text-center">
+                            {d}
+                          </div>
+                        ))}
+                      </div>
 
-                    <div className="flex flex-col gap-1">
-                      {monthGrid.map((week, wi) => (
-                        <div key={wi} className="grid grid-cols-7 gap-1">
-                          {week.map((cell) => {
-                            if (cell.empty)
+                      <div className="flex flex-col gap-1">
+                        {monthGrid.map((week, wi) => (
+                          <div key={wi} className="grid grid-cols-7 gap-1">
+                            {week.map((cell) => {
+                              if (cell.empty)
+                                return (
+                                  <div
+                                    key={cell.key}
+                                    className="h-6 rounded-md"
+                                  />
+                                );
+
+                              const cls =
+                                cell.score > 0
+                                  ? HEAT_COLORS[cell.score]
+                                  : "bg-slate-800/40";
+
                               return (
-                                <div
+                                <button
                                   key={cell.key}
-                                  className="h-6 rounded-md"
+                                  onMouseEnter={(e) =>
+                                    handleCellMouseEnter(e, {
+                                      key: cell.dateKey,
+                                      mood: cell.mood,
+                                    })
+                                  }
+                                  onMouseLeave={handleCellMouseLeave}
+                                  onClick={() => openDrawerFor(cell.dateKey)}
+                                  className={`h-6 rounded-md ${cls}`}
                                 />
                               );
-
-                            const cls =
-                              cell.score > 0
-                                ? HEAT_COLORS[cell.score]
-                                : "bg-slate-800/40";
-
-                            return (
-                              <button
-                                key={cell.key}
-                                onMouseEnter={(e) =>
-                                  handleCellMouseEnter(e, {
-                                    key: cell.dateKey,
-                                    mood: cell.mood,
-                                  })
-                                }
-                                onMouseLeave={handleCellMouseLeave}
-                                onClick={() => openDrawerFor(cell.dateKey)}
-                                className={`h-6 rounded-md ${cls}`}
-                              />
-                            );
-                          })}
-                        </div>
-                      ))}
+                            })}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </section>

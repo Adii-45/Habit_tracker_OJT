@@ -6,6 +6,8 @@ import Dashboard from "./pages/Dashboard/Dashboard";
 import MyHabits from "./pages/Dashboard/MyHabits";
 import Analytics from "./pages/Dashboard/Analytics";
 import MoodTracker from "./pages/Dashboard/MoodTracker";
+import Community from "./pages/Dashboard/Community";
+import Settings from "./pages/Dashboard/Settings";
 import Profile from "./pages/Profile";
 
 export default function App() {
@@ -19,6 +21,8 @@ export default function App() {
         <Route path="/habits" element={<MyHabits />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/mood-tracker" element={<MoodTracker />} />
+        <Route path="/community" element={<Community />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/profile" element={<Profile />} />
       </Routes>
     </Router>

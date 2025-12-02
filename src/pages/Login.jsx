@@ -4,6 +4,7 @@ import Logo from "../components/Logo";
 
 const USERS_KEY = "habitrix_users";
 const ACTIVE_USER_KEY = "habitrix_activeUser";
+const ACTIVE_USER_ID_KEY = "habitrix_activeUserId";
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export default function Login() {
@@ -70,6 +71,9 @@ export default function Login() {
 
       window.localStorage.setItem(USERS_KEY, JSON.stringify(users));
       window.localStorage.setItem(ACTIVE_USER_KEY, safeUsername);
+      if (user && user.id) {
+        window.localStorage.setItem(ACTIVE_USER_ID_KEY, user.id);
+      }
 
       navigate("/dashboard");
     } catch (error) {

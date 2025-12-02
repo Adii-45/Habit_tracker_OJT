@@ -13,24 +13,14 @@ import {
   BarChart,
   Bar,
 } from "recharts";
+import { getActiveUserId, fetchUserState } from "../../utils/apiClient";
 
-const USERS_KEY = "habitrix_users";
 const ACTIVE_USER_KEY = "habitrix_activeUser";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function getTodayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
-}
-
-function loadUsersFromStorage() {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(USERS_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
 }
 
 function getLastNDays(n) {
@@ -368,27 +358,38 @@ export default function Analytics() {
   const [hoveredCell, setHoveredCell] = useState(null);
 
   useEffect(() => {
-    const active =
+    const activeUsername =
       typeof window !== "undefined"
         ? window.localStorage.getItem(ACTIVE_USER_KEY)
         : null;
+    const activeUserId = getActiveUserId();
 
-    if (!active) {
+    if (!activeUsername || !activeUserId) {
       navigate("/login");
       return;
     }
 
-    const users = loadUsersFromStorage();
-    const stored = users[active] || {};
+    async function load() {
+      try {
+        const user = await fetchUserState(activeUserId);
+        setUsername(user.username || activeUsername);
+        const resolvedName =
+          typeof user.name === "string" && user.name.trim()
+            ? user.name
+            : activeUsername;
+        setDisplayName(resolvedName);
+        setAvatar(
+          typeof user.avatarDataUrl === "string" ? user.avatarDataUrl : ""
+        );
+        setHabits(Array.isArray(user.habits) ? user.habits : []);
+        setIsReady(true);
+      } catch (error) {
+        console.error("Failed to load analytics data", error);
+        navigate("/login");
+      }
+    }
 
-    setUsername(active);
-    const resolvedName =
-      typeof stored.name === "string" && stored.name.trim() ? stored.name : active;
-    setDisplayName(resolvedName);
-    setAvatar(typeof stored.avatarDataUrl === "string" ? stored.avatarDataUrl : "");
-
-    setHabits(Array.isArray(stored.habits) ? stored.habits : []);
-    setIsReady(true);
+    load();
   }, [navigate]);
 
   const todayKey = getTodayKey();
@@ -459,12 +460,13 @@ export default function Analytics() {
   );
 
   const handleManageProfile = () => {
-    navigate("/profile");
+    navigate("/settings");
   };
 
   const handleLogout = () => {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(ACTIVE_USER_KEY);
+      window.localStorage.removeItem("habitrix_activeUserId");
     }
     navigate("/login");
   };
@@ -480,8 +482,8 @@ export default function Analytics() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50">
-      <div className="flex min-h-screen">
+    <div className="h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50">
+      <div className="flex h-screen">
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
         {sidebarOpen && (

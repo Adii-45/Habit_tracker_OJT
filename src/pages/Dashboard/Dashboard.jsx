@@ -6,8 +6,17 @@ import HabitCard from "./HabitCard";
 import WeeklyChart from "./WeeklyChart";
 import QuickNote from "./QuickNote";
 import StreakCard from "./StreakCard";
+import {
+  getActiveUserId,
+  fetchUserState,
+  apiCreateHabit,
+  apiToggleHabitToday,
+  apiDeleteHabit,
+  apiCreateNote,
+  apiUpdateNote,
+  apiDeleteNote,
+} from "../../utils/apiClient";
 
-const USERS_KEY = "habitrix_users";
 const ACTIVE_USER_KEY = "habitrix_activeUser";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -21,21 +30,6 @@ function getPreviousDateKey(dateKey) {
   const d = new Date(dateKey + "T00:00:00");
   d.setDate(d.getDate() - 1);
   return d.toISOString().slice(0, 10);
-}
-
-function loadUsersFromStorage() {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(USERS_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveUsersToStorage(users) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(USERS_KEY, JSON.stringify(users));
 }
 
 function calculateCurrentStreak(completions, todayKey) {
@@ -179,6 +173,7 @@ export default function Dashboard() {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [avatar, setAvatar] = useState("");
+  const [userId, setUserId] = useState("");
   const [userState, setUserState] = useState({ habits: [], notes: [] });
   const [isReady, setIsReady] = useState(false);
   const [isAddingHabit, setIsAddingHabit] = useState(false);
@@ -186,64 +181,43 @@ export default function Dashboard() {
   const [newHabitDescription, setNewHabitDescription] = useState("");
 
   useEffect(() => {
-    const active =
+    const activeUsername =
       typeof window !== "undefined"
         ? window.localStorage.getItem(ACTIVE_USER_KEY)
         : null;
+    const activeUserId = getActiveUserId();
 
-    if (!active) {
+    if (!activeUsername || !activeUserId) {
       navigate("/login");
       return;
     }
 
-    const users = loadUsersFromStorage();
-    const stored = users[active] || {};
-    setUsername(active);
-    const resolvedName =
-      typeof stored.name === "string" && stored.name.trim()
-        ? stored.name
-        : active;
-    setDisplayName(resolvedName);
-    setAvatar(typeof stored.avatarDataUrl === "string" ? stored.avatarDataUrl : "");
-
-    const storedNotes = Array.isArray(stored.notes) ? stored.notes : [];
-    const legacyNote =
-      !storedNotes.length && typeof stored.note === "string" && stored.note.trim()
-        ? [
-            {
-              id: `legacy-${Date.now()}`,
-              text: stored.note,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-          ]
-        : [];
-
-    setUserState({
-      habits: Array.isArray(stored.habits) ? stored.habits : [],
-      notes: storedNotes.length ? storedNotes : legacyNote,
-    });
-    setIsReady(true);
-  }, [navigate]);
-
-  const persistUserState = (updater) => {
-    setUserState((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-
-      if (username) {
-        const users = loadUsersFromStorage();
-        const existing = users[username] || {};
-        users[username] = {
-          ...existing,
-          habits: next.habits || [],
-          notes: next.notes || [],
-        };
-        saveUsersToStorage(users);
+    async function load() {
+      try {
+        const user = await fetchUserState(activeUserId);
+        setUserId(activeUserId);
+        setUsername(user.username || activeUsername);
+        const resolvedName =
+          typeof user.name === "string" && user.name.trim()
+            ? user.name
+            : activeUsername;
+        setDisplayName(resolvedName);
+        setAvatar(
+          typeof user.avatarDataUrl === "string" ? user.avatarDataUrl : ""
+        );
+        setUserState({
+          habits: Array.isArray(user.habits) ? user.habits : [],
+          notes: Array.isArray(user.notes) ? user.notes : [],
+        });
+        setIsReady(true);
+      } catch (error) {
+        console.error("Failed to load dashboard data", error);
+        navigate("/login");
       }
+    }
 
-      return next;
-    });
-  };
+    load();
+  }, [navigate]);
 
   const todayKey = getTodayKey();
 
@@ -271,103 +245,86 @@ export default function Dashboard() {
   );
 
   const handleManageProfile = () => {
-    navigate("/profile");
+    navigate("/settings");
   };
 
   const handleLogout = () => {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(ACTIVE_USER_KEY);
+      window.localStorage.removeItem("habitrix_activeUserId");
     }
     navigate("/login");
   };
 
-  const handleToggleHabitToday = (habitId) => {
-    const dateKey = todayKey;
-    persistUserState((prev) => {
-      const habits = prev.habits.map((habit) => {
-        if (habit.id !== habitId) return habit;
-        const completions = Array.isArray(habit.completions)
-          ? [...habit.completions]
-          : [];
-        const index = completions
-          .map((d) => d.slice(0, 10))
-          .indexOf(dateKey);
-        if (index >= 0) {
-          completions.splice(index, 1);
-        } else {
-          completions.push(dateKey);
-        }
-        return { ...habit, completions };
-      });
-      return { ...prev, habits };
-    });
+  const handleToggleHabitToday = async (habitId) => {
+    if (!userId) return;
+    try {
+      const updatedHabits = await apiToggleHabitToday(userId, habitId, todayKey);
+      setUserState((prev) => ({ ...prev, habits: updatedHabits }));
+    } catch (error) {
+      console.error("Failed to toggle habit", error);
+    }
   };
 
-  const handleDeleteHabit = (habitId) => {
-    persistUserState((prev) => ({
-      ...prev,
-      habits: prev.habits.filter((h) => h.id !== habitId),
-    }));
+  const handleDeleteHabit = async (habitId) => {
+    if (!userId) return;
+    try {
+      const updatedHabits = await apiDeleteHabit(userId, habitId);
+      setUserState((prev) => ({ ...prev, habits: updatedHabits }));
+    } catch (error) {
+      console.error("Failed to delete habit", error);
+    }
   };
 
-  const handleCreateHabit = (event) => {
+  const handleCreateHabit = async (event) => {
     event.preventDefault();
-    if (!newHabitName.trim()) return;
+    if (!newHabitName.trim() || !userId) return;
 
-    const id = String(Date.now());
-    const newHabit = {
-      id,
-      name: newHabitName.trim(),
-      description: newHabitDescription.trim() || "New habit",
-      icon: "📌",
-      iconBg: "bg-sky-100 text-sky-600",
-      completions: [],
-      createdAt: new Date().toISOString(),
-    };
+    try {
+      const updatedHabits = await apiCreateHabit(userId, {
+        name: newHabitName.trim(),
+        description: newHabitDescription.trim() || "New habit",
+      });
+      setUserState((prev) => ({ ...prev, habits: updatedHabits }));
 
-    persistUserState((prev) => ({
-      ...prev,
-      habits: [...prev.habits, newHabit],
-    }));
-
-    setIsAddingHabit(false);
-    setNewHabitName("");
-    setNewHabitDescription("");
+      setIsAddingHabit(false);
+      setNewHabitName("");
+      setNewHabitDescription("");
+    } catch (error) {
+      console.error("Failed to create habit", error);
+    }
   };
 
-  const handleCreateNote = (text) => {
+  const handleCreateNote = async (text) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    const now = new Date().toISOString();
-    const newNote = {
-      id: String(Date.now()),
-      text: trimmed,
-      createdAt: now,
-      updatedAt: now,
-    };
-    persistUserState((prev) => ({
-      ...prev,
-      notes: [newNote, ...(prev.notes || [])],
-    }));
+    if (!trimmed || !userId) return;
+    try {
+      const updatedNotes = await apiCreateNote(userId, trimmed);
+      setUserState((prev) => ({ ...prev, notes: updatedNotes }));
+    } catch (error) {
+      console.error("Failed to create note", error);
+    }
   };
 
-  const handleUpdateNote = (id, text) => {
+  const handleUpdateNote = async (id, text) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    const now = new Date().toISOString();
-    persistUserState((prev) => ({
-      ...prev,
-      notes: (prev.notes || []).map((note) =>
-        note.id === id ? { ...note, text: trimmed, updatedAt: now } : note
-      ),
-    }));
+    if (!trimmed || !userId) return;
+    try {
+      const updatedNotes = await apiUpdateNote(userId, id, trimmed);
+      setUserState((prev) => ({ ...prev, notes: updatedNotes }));
+    } catch (error) {
+      console.error("Failed to update note", error);
+    }
   };
 
-  const handleDeleteNote = (id) => {
-    persistUserState((prev) => ({
-      ...prev,
-      notes: (prev.notes || []).filter((note) => note.id !== id),
-    }));
+  const handleDeleteNote = async (id) => {
+    if (!userId) return;
+    try {
+      const updatedNotes = await apiDeleteNote(userId, id);
+      setUserState((prev) => ({ ...prev, notes: updatedNotes }));
+    } catch (error) {
+      console.error("Failed to delete note", error);
+    }
   };
 
   if (!isReady) {
@@ -381,8 +338,8 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50">
-      <div className="flex min-h-screen">
+    <div className="h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50">
+      <div className="flex h-screen">
         <Sidebar
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
@@ -395,7 +352,7 @@ export default function Dashboard() {
           />
         )}
 
-        <main className="relative z-10 flex-1 overflow-x-hidden">
+        <main className="relative z-10 flex-1 overflow-x-hidden overflow-y-auto">
           <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 pt-10 pb-6 sm:px-6 lg:px-10">
             <Topbar
               username={displayName}
