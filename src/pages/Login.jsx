@@ -5,7 +5,7 @@ import Logo from "../components/Logo";
 const USERS_KEY = "habitrix_users";
 const ACTIVE_USER_KEY = "habitrix_activeUser";
 const ACTIVE_USER_ID_KEY = "habitrix_activeUserId";
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://${import.meta.env.VITE_API_URL}";
 
 export default function Login() {
   const navigate = useNavigate();
