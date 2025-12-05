@@ -9,14 +9,14 @@ export default function Navbar() {
         <span className="text-xl font-semibold text-white">Habitrix</span>
       </div>
 
-      <ul className="hidden md:flex gap-8 text-sm font-medium text-white/90">
+      {/* <ul className="hidden md:flex gap-8 text-sm font-medium text-white/90">
         <li>Home</li>
         <li>Features</li>
         <li>How it works</li>
         <li>Blog</li>
         <li>Resources</li>
         <li>About Us</li>
-      </ul>
+      </ul> */}
 
       <div className="flex items-center gap-3">
         <Link to="/signup">
